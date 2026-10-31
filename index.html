@@ -58,6 +58,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .swatches .custom input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
 .swatches [aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
 .dlg>*{flex-shrink:0}
+.wtypes{display:flex;flex-wrap:wrap;gap:6px}
+.dlg .wtypes button.wt{border:2px solid rgba(0,0,0,.15);border-radius:999px;padding:6px 12px;font-size:14px}
+.dlg .wtypes button.wt[aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
 .symgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;font-weight:400;max-height:45vh;overflow-y:auto;overscroll-behavior:contain}
 .symgrid button{background:#fff!important;padding:4px!important;aspect-ratio:1/1}
 .symgrid img{width:100%;height:100%;object-fit:contain}
@@ -102,6 +105,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     </div>
     <p class="hint" id="tAudStatus"></p>
   </div>
+  <div class="field">Word type<div id="tTypes" class="wtypes"></div><p class="hint">Sets the colour. You can still pick any colour below.</p></div>
   <div class="field">Color<div id="tColors" class="swatches"></div></div>
   <label class="field">Tapping also opens<select id="tLink"></select></label>
   <div class="actions">
@@ -135,6 +139,16 @@ const PALETTE=[
   '#e3d4ff','#9775fa','#cfe0ff','#4dabf7',
   '#c5f6fa','#3bc9db','#cdeccd','#69db7c',
   '#e9dcc9','#a47148'];
+// Modified Fitzgerald Key (common version; exact shades vary between AAC apps).
+const WORD_TYPES=[
+  {id:'people',name:'People',color:'#ffe066'},
+  {id:'actions',name:'Actions',color:'#8ce99a'},
+  {id:'things',name:'Things',color:'#ffc078'},
+  {id:'describing',name:'Describing',color:'#a5d8ff'},
+  {id:'social',name:'Social',color:'#fcc2d7'},
+  {id:'questions',name:'Questions',color:'#d0bfff'},
+  {id:'negation',name:'No / stop',color:'#ff8787'},
+  {id:'little',name:'Little words',color:'#ffffff'}];
 function inkFor(hex){const m=/^#?([0-9a-f]{6})$/i.exec(hex||'');if(!m)return '#1d2330';
   const n=parseInt(m[1],16),c=[n>>16,n>>8&255,n&255].map(v=>{v/=255;return v<=.03928?v/12.92:((v+.055)/1.055)**2.4;});
   const L=.2126*c[0]+.7152*c[1]+.0722*c[2];return L<.33?'#ffffff':'#1d2330';}
@@ -219,6 +233,13 @@ $('#bDelete').onclick=async()=>{const b=cur();if(!confirm(`Delete "${b.name}" an
   state.current=state.boards[0].id;await save();$('#boardDlg').close();render();};
 
 /* ---------- tile editor ---------- */
+function setTypes(){const box=$('#tTypes');box.innerHTML='';
+  for(const w of WORD_TYPES){const b=document.createElement('button');b.type='button';b.className='wt';
+    b.textContent=w.name;b.style.background=w.color;b.style.color=inkFor(w.color);
+    b.setAttribute('aria-pressed',draft.type===w.id);
+    b.onclick=()=>{const off=draft.type===w.id;draft.type=off?'':w.id;if(!off)draft.color=w.color;
+      setTypes();setSwatches();refreshPreview();};
+    box.appendChild(b);}}
 function setSwatches(){const box=$('#tColors');box.innerHTML='';
   for(const c of PALETTE){const s=document.createElement('button');s.type='button';s.style.background=c;
     s.setAttribute('aria-pressed',draft.color===c);s.setAttribute('aria-label','color');
@@ -246,7 +267,7 @@ async function refreshPreview(){
 }
 function openEditor(id){
   const b=cur();const t=id?b.tiles.find(x=>x.id===id):null;
-  draft={id:t?.id||null,label:t?.label||'',color:t?.color||PALETTE[0],link:t?.link||'',
+  draft={id:t?.id||null,label:t?.label||'',color:t?.color||PALETTE[0],link:t?.link||'',type:t?.type||'',
     img:t?.imageId?{kind:'id',value:t.imageId}:t?.imageUrl?{kind:'url',value:t.imageUrl}:{kind:null},
     aud:t?.audioId?{kind:'id',value:t.audioId}:{kind:null}};
   $('#tTitle').textContent=t?'Edit tile':'New tile';
@@ -255,7 +276,7 @@ function openEditor(id){
   const sel=$('#tLink');sel.innerHTML='<option value="">— nothing —</option>';
   for(const x of state.boards)if(x.id!==b.id){const o=document.createElement('option');o.value=x.id;o.textContent=x.name;sel.appendChild(o);}
   sel.value=draft.link;
-  setSwatches();refreshPreview();$('#tileDlg').showModal();
+  setTypes();setSwatches();refreshPreview();$('#tileDlg').showModal();
 }
 $('#tLabel').oninput=e=>{draft.label=e.target.value;$('#tPrevLabel').textContent=draft.label;};
 $('#tLink').onchange=e=>draft.link=e.target.value;
@@ -378,7 +399,7 @@ $('#tSave').onclick=async()=>{
   const b=cur();let t=draft.id?b.tiles.find(x=>x.id===draft.id):null;
   if(!t){t={id:uid()};b.tiles.push(t);}
   const oldImg=t.imageId,oldAud=t.audioId;
-  t.label=label;t.color=draft.color;t.link=draft.link;
+  t.label=label;t.color=draft.color;t.link=draft.link;t.type=draft.type;
   if(draft.img.kind==='blob'){t.imageId=uid();await mediaPut(t.imageId,draft.img.value);t.imageUrl=null;}
   else if(draft.img.kind==='url'){t.imageId=null;t.imageUrl=draft.img.value;}
   else if(draft.img.kind!=='id'){t.imageId=null;t.imageUrl=null;}
