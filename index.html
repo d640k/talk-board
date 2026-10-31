@@ -92,6 +92,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="row">
       <button type="button" id="tRec" class="rec">● Record</button>
       <button type="button" id="tPlay">▶ Play</button>
+      <button type="button" id="tTrim" class="ghost">✂ Trim</button>
       <button type="button" id="tAudUpload" class="ghost">Upload</button>
       <button type="button" id="tAudRemove" class="ghost">Remove</button>
     </div>
@@ -221,7 +222,7 @@ async function refreshPreview(){
   $('#tImgRemove').hidden=!src;
   const a=draft.aud.kind;
   $('#tAudStatus').textContent=a==='blob'?'New sound ready — tap Play to check it.':a==='id'?'Has a recording.':'No recording yet. It will use the phone\'s voice until you record one.';
-  $('#tAudRemove').hidden=!a;
+  $('#tAudRemove').hidden=!a;$('#tTrim').hidden=!a;
 }
 function openEditor(id){
   const b=cur();const t=id?b.tiles.find(x=>x.id===id):null;
@@ -272,17 +273,67 @@ async function pickSymbol(u,q){
   $('#symPanel').hidden=true;refreshPreview();
 }
 /* audio */
+let audioJob=Promise.resolve();
+const SR=24000;
+async function trimAudio(blob){
+  // Decoding on a 24 kHz offline context also resamples, which keeps files small.
+  const ctx=new OfflineAudioContext(1,1,SR);
+  const buf=await ctx.decodeAudioData(await blob.arrayBuffer());
+  const n=buf.length,ch=buf.numberOfChannels;
+  const mono=new Float32Array(n);
+  for(let c=0;c<ch;c++){const d=buf.getChannelData(c);for(let i=0;i<n;i++)mono[i]+=d[i]/ch;}
+  const win=Math.round(SR*0.01),nw=Math.floor(n/win);
+  if(nw<5)return null;
+  const rms=new Float32Array(nw);
+  for(let w=0;w<nw;w++){let s=0;for(let i=w*win;i<(w+1)*win;i++)s+=mono[i]*mono[i];rms[w]=Math.sqrt(s/win);}
+  const sorted=[...rms].sort((a,b)=>a-b);
+  const floor=sorted[Math.floor(nw*0.1)],peak=sorted[nw-1];
+  const thr=Math.max(floor*4,peak*0.08,0.004);
+  // Require 3 loud windows in a row (30 ms) so a button-tap click doesn't count as speech.
+  const loud=w=>rms[w]>=thr&&rms[w+1]>=thr&&rms[w+2]>=thr;
+  let a=0;while(a<nw-2&&!loud(a))a++;
+  if(a>=nw-2)return null;
+  let b=nw-3;while(b>a&&!loud(b))b--;
+  const start=Math.max(0,a*win-Math.round(SR*0.08));
+  const end=Math.min(n,(b+3)*win+Math.round(SR*0.15));
+  const out=mono.slice(start,end);
+  let pk=0;for(const v of out)pk=Math.max(pk,Math.abs(v));
+  const gain=pk>0?Math.min(4,0.9/pk):1;
+  const f=Math.min(Math.round(SR*0.01),out.length>>2);
+  for(let i=0;i<out.length;i++){let g=gain;if(i<f)g*=i/f;else if(i>=out.length-f)g*=(out.length-1-i)/f;out[i]*=g;}
+  return {blob:encodeWav(out,SR),before:n/SR,after:out.length/SR};
+}
+function encodeWav(s,sr){
+  const v=new DataView(new ArrayBuffer(44+s.length*2));
+  const str=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i));};
+  str(0,'RIFF');v.setUint32(4,36+s.length*2,true);str(8,'WAVE');str(12,'fmt ');
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,sr,true);
+  v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);str(36,'data');v.setUint32(40,s.length*2,true);
+  for(let i=0;i<s.length;i++){const x=Math.max(-1,Math.min(1,s[i]));v.setInt16(44+i*2,x<0?x*0x8000:x*0x7fff,true);}
+  return new Blob([v],{type:'audio/wav'});
+}
+async function setTrimmedAudio(blob,d){
+  $('#tAudStatus').textContent='Trimming…';
+  let msg;
+  try{const r=await trimAudio(blob);
+    if(r){blob=r.blob;msg=`Trimmed ${r.before.toFixed(1)}s → ${r.after.toFixed(1)}s. Tap Play to check it.`;}
+    else msg='Couldn\'t find speech to trim — kept as recorded.';
+  }catch(e){msg='Couldn\'t trim this one — kept as recorded.';}
+  if(draft!==d)return;
+  d.aud={kind:'blob',value:blob};await refreshPreview();$('#tAudStatus').textContent=msg;
+}
 async function toggleRecord(){
   const btn=$('#tRec');
   if(rec&&rec.state==='recording'){rec.stop();return;}
   let stream;
   try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});}
   catch(e){$('#tAudStatus').textContent='Microphone blocked. Allow mic access for this site in Chrome settings.';return;}
-  const chunks=[];rec=new MediaRecorder(stream);
-  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
-  rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());btn.classList.remove('on');btn.textContent='● Record';
-    if(chunks.length&&draft){draft.aud={kind:'blob',value:new Blob(chunks,{type:rec.mimeType||'audio/webm'})};refreshPreview();}};
-  rec.start();btn.classList.add('on');btn.textContent='■ Stop';$('#tAudStatus').textContent='Recording… tap Stop when done.';
+  const chunks=[],d=draft,r=rec=new MediaRecorder(stream);
+  r.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+  audioJob=new Promise(done=>{r.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());btn.classList.remove('on');btn.textContent='● Record';
+    if(chunks.length&&draft===d)await setTrimmedAudio(new Blob(chunks,{type:r.mimeType||'audio/webm'}),d);
+    done();};});
+  r.start();btn.classList.add('on');btn.textContent='■ Stop';$('#tAudStatus').textContent='Recording… tap Stop when done.';
 }
 function stopRecording(){if(rec&&rec.state==='recording')rec.stop();}
 $('#tRec').onclick=toggleRecord;
@@ -291,13 +342,17 @@ $('#tPlay').onclick=async()=>{stopRecording();player.pause();
   else if(draft.aud.kind==='id'){const u=await mediaURL(draft.aud.value);if(u){player.src=u;player.play().catch(()=>{});}}
   else speak(draft.label);};
 $('#tAudUpload').onclick=()=>$('#fileAud').click();
-$('#fileAud').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;draft.aud={kind:'blob',value:f};refreshPreview();};
+$('#fileAud').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;audioJob=setTrimmedAudio(f,draft);};
+$('#tTrim').onclick=async()=>{const d=draft;let b=null;
+  if(d.aud.kind==='blob')b=d.aud.value;else if(d.aud.kind==='id')b=await mediaGet(d.aud.value);
+  if(b)audioJob=setTrimmedAudio(b,d);};
 $('#tAudRemove').onclick=()=>{draft.aud={kind:null};refreshPreview();};
 $('#tCancel').onclick=()=>$('#tileDlg').close();
 $('#tileDlg').addEventListener('close',()=>{stopRecording();draft=null;});
 $('#tSave').onclick=async()=>{
   stopRecording();
-  if(rec&&rec.state==='recording')await new Promise(r=>setTimeout(r,200));
+  await audioJob;
+  if(!draft)return;
   const label=draft.label.trim();
   if(!label&&!draft.img.kind){alert('Add a label or a picture.');return;}
   const b=cur();let t=draft.id?b.tiles.find(x=>x.id===draft.id):null;
