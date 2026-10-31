@@ -61,6 +61,14 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .swatches .custom input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
 .swatches [aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
 .dlg>*{flex-shrink:0}
+[hidden]{display:none!important}
+#bShare input{flex:1 1 100%}
+.dlg select{border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:9px;font-weight:400}
+.hbtn.sync{font-size:14px;color:var(--muted)}
+.hbtn.sync[data-state=auth],.hbtn.sync[data-state=error]{color:var(--danger);border-color:var(--danger)}
+.banner{margin:12px 12px 0;padding:10px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--line);display:flex;gap:10px;align-items:center;justify-content:space-between}
+.banner[hidden]{display:none}
+.banner button{border:none;background:var(--accent);color:var(--accent-ink);border-radius:10px;padding:8px 12px;font-weight:600}
 .wtypes{display:flex;flex-wrap:wrap;gap:6px}
 .dlg .wtypes button.wt{border:2px solid rgba(0,0,0,.15);border-radius:999px;padding:6px 12px;font-size:14px}
 .dlg .wtypes button.wt[aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
@@ -74,10 +82,13 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <body>
 <header>
   <div id="chips"></div>
+  <button class="hbtn sync" id="syncBtn" hidden></button>
   <button class="hbtn" id="boardBtn" hidden aria-label="Board settings">⚙</button>
   <button class="hbtn" id="editBtn">Edit</button>
 </header>
 <main>
+  <div id="addBanner" class="banner" hidden>A board was shared with you. <button type="button">Add it</button></div>
+  <p id="roNote" class="banner" hidden>This shared board is view-only.</p>
   <div id="grid"></div>
   <p id="empty" hidden>This board is empty.<br>Tap <b>Edit</b>, then <b>+</b> to add tiles.</p>
 </main>
@@ -122,9 +133,22 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <h2>Board</h2>
   <label class="field">Name<input id="bName" maxlength="30"></label>
   <label class="field">Columns: <output id="bColsOut"></output><input id="bCols" type="range" min="2" max="6" step="1"></label>
+  <div class="field" id="bDrive" hidden>Google Drive
+    <p class="hint" id="bDriveStatus"></p>
+    <div class="row">
+      <button type="button" id="bDriveSave">Save to Google Drive</button>
+      <button type="button" id="bSyncNow">Sync now</button>
+    </div>
+    <div class="row" id="bShare">
+      <input id="bShareEmail" type="email" placeholder="Share with (email)" autocomplete="email">
+      <select id="bShareRole"><option value="writer">Can edit</option><option value="reader">View only</option></select>
+      <button type="button" id="bShareGo">Share</button>
+    </div>
+    <div class="row"><button type="button" id="bAddShared" class="ghost">Add a board someone shared with you</button></div>
+  </div>
   <button type="button" id="bDelete" class="ghost danger">Delete this board</button>
   <div class="field">Backup
-    <p class="hint">Everything lives on this phone only. Export a backup now and then — recordings can't be recovered otherwise.</p>
+    <p class="hint">Saves every board, with pictures and recordings, to one file. Boards not saved to Google Drive exist only on this phone, so export now and then.</p>
     <div class="row"><button type="button" id="bExport">Export</button><button type="button" id="bImport">Import</button></div>
   </div>
   <div class="actions"><span></span><button type="button" id="bDone" class="primary">Done</button></div>
@@ -196,10 +220,11 @@ function render(){
   if(editing){const c=document.createElement('button');c.className='chip add';c.textContent='+ Board';c.onclick=newBoard;chips.appendChild(c);}
   const g=$('#grid');g.style.setProperty('--cols',b.cols);g.innerHTML='';
   for(const t of b.tiles)g.appendChild(tileEl(t));
-  if(editing){const a=document.createElement('button');a.className='add-tile';a.innerHTML='<span>+</span><small>Add tile</small>';
+  if(editing&&!ro(b)){const a=document.createElement('button');a.className='add-tile';a.innerHTML='<span>+</span><small>Add tile</small>';
     a.onclick=()=>openEditor(null);g.appendChild(a);}
   $('#empty').hidden=editing||b.tiles.length>0;
-  if(sortable)sortable.option('disabled',!editing);
+  if(sortable)sortable.option('disabled',!editing||ro(b));
+  $('#roNote').hidden=!(editing&&ro(b));
   chips.querySelector('.on')?.scrollIntoView({inline:'nearest',block:'nearest'});
 }
 function tileEl(t){
@@ -212,7 +237,7 @@ function tileEl(t){
   const l=document.createElement('span');l.className='label';l.textContent=t.label||'';
   el.append(pic,l);
   if(t.link){const i=document.createElement('i');i.className='badge';i.textContent='▸';el.appendChild(i);}
-  el.onclick=()=>{if(Date.now()-lastDrag<400)return;editing?openEditor(t.id):press(t,el);};
+  el.onclick=()=>{if(Date.now()-lastDrag<400)return;editing&&!ro()?openEditor(t.id):press(t,el);};
   return el;
 }
 function press(t,el){
@@ -225,11 +250,21 @@ function press(t,el){
 function newBoard(){const name=(prompt('Name for the new board')||'').trim();if(!name)return;
   const b={id:uid(),name,cols:cur().cols||4,tiles:[]};state.boards.push(b);state.current=b.id;save();render();}
 function openBoardDlg(){const b=cur();$('#bName').value=b.name;$('#bCols').value=b.cols;$('#bColsOut').textContent=b.cols;
-  $('#bDelete').hidden=state.boards.length<2;$('#boardDlg').showModal();}
-$('#bCols').oninput=e=>{cur().cols=+e.target.value;$('#bColsOut').textContent=e.target.value;save();render();};
-$('#bName').onchange=e=>{const v=e.target.value.trim();if(v){cur().name=v;save();render();}};
+  $('#bName').disabled=$('#bCols').disabled=ro(b);
+  $('#bDelete').hidden=state.boards.length<2;$('#bDelete').textContent=b.drive?'Remove this board from this phone':'Delete this board';
+  refreshDriveUI();$('#boardDlg').showModal();}
+$('#bDriveSave').onclick=saveToDrive;
+$('#bSyncNow').onclick=()=>syncAll(true);
+$('#bShareGo').onclick=shareBoard;
+$('#bAddShared').onclick=()=>{$('#boardDlg').close();addShared(null);};
+$('#syncBtn').onclick=()=>syncAll(true);
+$('#addBanner button').onclick=()=>{const id=$('#addBanner').dataset.id;$('#addBanner').hidden=true;
+  history.replaceState(null,'',location.pathname);addShared(id);};
+$('#bCols').oninput=e=>{const b=cur();b.cols=+e.target.value;b.metaAt=Date.now();markDirty(b);$('#bColsOut').textContent=e.target.value;save();render();};
+$('#bName').onchange=e=>{const v=e.target.value.trim();const b=cur();if(v){b.name=v;b.metaAt=Date.now();markDirty(b);save();render();}};
 $('#bDone').onclick=()=>$('#boardDlg').close();
-$('#bDelete').onclick=async()=>{const b=cur();if(!confirm(`Delete "${b.name}" and all its tiles?`))return;
+$('#bDelete').onclick=async()=>{const b=cur();
+  if(!confirm(b.drive?`Remove "${b.name}" from this phone? The Google Drive copy is kept.`:`Delete "${b.name}" and all its tiles?`))return;
   for(const t of b.tiles){await mediaDel(t.imageId);await mediaDel(t.audioId);}
   state.boards=state.boards.filter(x=>x.id!==b.id);
   for(const x of state.boards)for(const t of x.tiles)if(t.link===b.id)t.link='';
@@ -402,7 +437,7 @@ $('#tSave').onclick=async()=>{
   const b=cur();let t=draft.id?b.tiles.find(x=>x.id===draft.id):null;
   if(!t){t={id:uid()};b.tiles.push(t);}
   const oldImg=t.imageId,oldAud=t.audioId;
-  t.label=label;t.color=draft.color;t.link=draft.link;t.type=draft.type;
+  t.label=label;t.color=draft.color;t.link=draft.link;t.type=draft.type;t.updatedAt=Date.now();
   if(draft.img.kind==='blob'){t.imageId=uid();await mediaPut(t.imageId,draft.img.value);t.imageUrl=null;}
   else if(draft.img.kind==='url'){t.imageId=null;t.imageUrl=draft.img.value;}
   else if(draft.img.kind!=='id'){t.imageId=null;t.imageUrl=null;}
@@ -410,12 +445,200 @@ $('#tSave').onclick=async()=>{
   else if(draft.aud.kind!=='id')t.audioId=null;
   if(oldImg&&oldImg!==t.imageId)await mediaDel(oldImg);
   if(oldAud&&oldAud!==t.audioId)await mediaDel(oldAud);
-  await save();$('#tileDlg').close();render();
+  markDirty(b);await save();$('#tileDlg').close();render();
 };
 $('#tDelete').onclick=async()=>{const b=cur();const t=b.tiles.find(x=>x.id===draft.id);if(!t)return;
   if(!confirm(`Delete "${t.label||'this tile'}"?`))return;
   await mediaDel(t.imageId);await mediaDel(t.audioId);b.tiles=b.tiles.filter(x=>x!==t);
-  await save();$('#tileDlg').close();render();};
+  (b.deleted||(b.deleted={}))[t.id]=Date.now();markDirty(b);await save();$('#tileDlg').close();render();};
+
+/* ---------- Google Drive sync ---------- */
+// Fill these in from Google Cloud Console (see setup steps). Leave clientId empty to hide Drive features.
+const GOOGLE={clientId:'',apiKey:'',appId:''};
+const driveOn=()=>!!GOOGLE.clientId;
+const API='https://www.googleapis.com/drive/v3',UP='https://www.googleapis.com/upload/drive/v3';
+let gToken=null,gTokenExp=0,tokenClient=null,gisReady=null,syncTimer=null,syncing=false,syncState='';
+const lsGet=k=>{try{return localStorage.getItem(k);}catch(e){return null;}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}};
+const ro=(b=cur())=>!!b?.drive?.readonly;
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.async=true;s.onload=res;s.onerror=()=>rej(new Error('Could not load Google sign-in.'));document.head.appendChild(s);});}
+function initGIS(){
+  if(!gisReady)gisReady=loadScript('https://accounts.google.com/gsi/client').then(()=>{
+    tokenClient=google.accounts.oauth2.initTokenClient({client_id:GOOGLE.clientId,scope:'https://www.googleapis.com/auth/drive.file',callback:()=>{}});});
+  return gisReady;
+}
+// Tokens last an hour. A new one needs a popup, which browsers only allow right after a tap.
+async function getToken(interactive){
+  if(gToken&&Date.now()<gTokenExp-60000)return gToken;
+  if(!interactive)throw new Error('auth');
+  await initGIS();
+  return new Promise((res,rej)=>{
+    tokenClient.callback=r=>{if(r.error){rej(new Error('auth'));return;}
+      gToken=r.access_token;gTokenExp=Date.now()+r.expires_in*1000;lsSet('tb_google','1');
+      lsSet('tb_token',JSON.stringify({t:gToken,exp:gTokenExp}));res(gToken);};
+    tokenClient.error_callback=()=>rej(new Error('auth'));
+    tokenClient.requestAccessToken({prompt:lsGet('tb_google')?'':'consent'});
+  });
+}
+async function gfetch(url,opts={}){
+  const t=await getToken(false);
+  const r=await fetch(url,{...opts,headers:{...(opts.headers||{}),Authorization:'Bearer '+t}});
+  if(r.status===401){gToken=null;throw new Error('auth');}
+  if(r.status===404)throw new Error('gone');
+  if(r.status===403)throw new Error('denied');
+  if(!r.ok)throw new Error('Drive error '+r.status);
+  return r;
+}
+async function packBoard(b){
+  const media={};
+  for(const t of b.tiles)for(const id of [t.imageId,t.audioId])
+    if(id){const blob=await mediaGet(id);if(blob)media[id]=await blobToDataURL(blob);}
+  const {drive,...board}=b;
+  return new Blob([JSON.stringify({app:'talkboard-board',version:1,board,media})],{type:'application/json'});
+}
+async function unpackMedia(remote){
+  for(const [id,url] of Object.entries(remote.media||{}))
+    if(!await mediaGet(id))await mediaPut(id,await (await fetch(url)).blob());
+}
+function multipart(meta,blob){const bd='tb'+uid();
+  return {type:`multipart/related; boundary=${bd}`,body:new Blob([
+    `--${bd}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${bd}\r\nContent-Type: application/json\r\n\r\n`,
+    blob,`\r\n--${bd}--`])};}
+async function uploadBoard(b){
+  const blob=await packBoard(b),id=b.drive?.fileId;
+  const meta={name:`${b.name} (Talk Board).json`};if(!id)meta.mimeType='application/json';
+  const url=`${UP}/files${id?'/'+id:''}`,method=id?'PATCH':'POST';
+  if(blob.size<4.5e6){const m=multipart(meta,blob);
+    return (await gfetch(`${url}?uploadType=multipart&fields=id,version`,{method,headers:{'Content-Type':m.type},body:m.body})).json();}
+  const r=await gfetch(`${url}?uploadType=resumable&fields=id,version`,{method,
+    headers:{'Content-Type':'application/json; charset=UTF-8','X-Upload-Content-Type':'application/json'},body:JSON.stringify(meta)});
+  const loc=r.headers.get('Location');if(!loc)throw new Error('Upload failed');
+  const r2=await fetch(loc,{method:'PUT',body:blob});if(!r2.ok)throw new Error('Upload failed '+r2.status);
+  return r2.json();
+}
+// Per-tile "newest edit wins". Deletions are kept as timestamps so a deleted tile doesn't come back.
+function mergeBoards(local,remote){
+  const deleted={...(remote.deleted||{})};
+  for(const [k,v] of Object.entries(local.deleted||{}))deleted[k]=Math.max(deleted[k]||0,v);
+  const tiles=new Map();
+  for(const t of [...remote.tiles,...local.tiles]){const c=tiles.get(t.id);if(!c||(t.updatedAt||0)>(c.updatedAt||0))tiles.set(t.id,t);}
+  for(const [id,ts] of Object.entries(deleted)){const t=tiles.get(id);if(t&&(t.updatedAt||0)<=ts)tiles.delete(id);}
+  const first=(local.orderAt||0)>=(remote.orderAt||0)?local:remote,second=first===local?remote:local;
+  const order=[...first.tiles,...second.tiles].map(t=>t.id).filter((id,i,a)=>a.indexOf(id)===i&&tiles.has(id));
+  const meta=(local.metaAt||0)>=(remote.metaAt||0)?local:remote;
+  return {id:local.id,name:meta.name,cols:meta.cols,metaAt:Math.max(local.metaAt||0,remote.metaAt||0),
+    orderAt:Math.max(local.orderAt||0,remote.orderAt||0),deleted,tiles:order.map(id=>tiles.get(id))};
+}
+const boardJSON=b=>{const {drive,...x}=b;return JSON.stringify(x);};
+async function syncBoard(b){
+  const d=b.drive,started=Date.now();
+  const meta=await (await gfetch(`${API}/files/${d.fileId}?fields=version,trashed,capabilities(canEdit)`)).json();
+  if(meta.trashed)throw new Error('gone');
+  d.readonly=!meta.capabilities?.canEdit;
+  let upload=!!d.dirty&&!d.readonly;
+  if(meta.version!==d.version){
+    const remote=await (await gfetch(`${API}/files/${d.fileId}?alt=media`)).json();
+    await unpackMedia(remote);
+    const merged=mergeBoards(b,remote.board);
+    for(const k of Object.keys(b))if(k!=='drive')delete b[k];
+    Object.assign(b,merged);
+    d.version=meta.version;
+    upload=!d.readonly&&boardJSON(b)!==boardJSON(remote.board);
+  }
+  if(upload){const r=await uploadBoard(b);d.version=r.version;}
+  d.dirty=(d.dirtyAt||0)>started;d.syncedAt=Date.now();d.error='';
+}
+function markDirty(b){
+  if(!b.drive)return;b.drive.dirty=true;b.drive.dirtyAt=Date.now();
+  clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncAll(false),3000);
+}
+async function gcMedia(){
+  const keep=new Set();for(const b of state.boards)for(const t of b.tiles){keep.add(t.imageId);keep.add(t.audioId);}
+  const keys=await idb('media','readonly',s=>s.getAllKeys());
+  for(const k of keys)if(!keep.has(k))await mediaDel(k);
+}
+async function syncAll(interactive){
+  if(!driveOn()||syncing)return;
+  const list=state.boards.filter(b=>b.drive);
+  if(!list.length){setSyncState('');return;}
+  syncing=true;setSyncState('syncing');
+  try{
+    if(interactive)await getToken(true);
+    for(const b of list){try{await syncBoard(b);}catch(e){if(e.message==='auth')throw e;b.drive.error=e.message;}}
+    await save();await gcMedia();
+    setSyncState(list.some(b=>b.drive.error)?'error':'ok');
+  }catch(e){setSyncState(e.message==='auth'?'auth':'error');}
+  finally{syncing=false;}
+  if(!$('#tileDlg').open)render();
+  if($('#boardDlg').open)refreshDriveUI();
+}
+function setSyncState(s){syncState=s;const b=$('#syncBtn');
+  b.hidden=!s;b.dataset.state=s;
+  b.textContent={ok:'☁ Synced',syncing:'↻ Syncing',error:'⚠ Sync',auth:'☁ Reconnect'}[s]||'';}
+function ago(t){if(!t)return 'never';const m=Math.round((Date.now()-t)/60000);return m<1?'just now':m<60?`${m} min ago`:`${Math.round(m/60)} h ago`;}
+const ERRORS={gone:'This board was deleted from Google Drive, or you no longer have access.',denied:'Google Drive refused access.'};
+function refreshDriveUI(){
+  const box=$('#bDrive');box.hidden=!driveOn();if(!driveOn())return;
+  const d=cur().drive;
+  $('#bDriveSave').hidden=!!d;$('#bSyncNow').hidden=!d;$('#bShare').hidden=!d||d.readonly;
+  $('#bDriveStatus').textContent=!d?'Only on this phone. Save it to Google Drive to back it up and share it.'
+    :d.error?(ERRORS[d.error]||d.error)
+    :`${d.readonly?'View-only shared board. ':''}Synced ${ago(d.syncedAt)}.`;
+}
+async function saveToDrive(){
+  const b=cur(),btn=$('#bDriveSave');btn.disabled=true;$('#bDriveStatus').textContent='Saving to Google Drive…';
+  try{await getToken(true);
+    b.metaAt=b.metaAt||Date.now();
+    const r=await uploadBoard(b);
+    b.drive={fileId:r.id,version:r.version,syncedAt:Date.now()};
+    await save();setSyncState('ok');
+  }catch(e){$('#bDriveStatus').textContent=e.message==='auth'?'Google sign-in was cancelled.':'Could not save: '+(ERRORS[e.message]||e.message);btn.disabled=false;return;}
+  btn.disabled=false;refreshDriveUI();
+}
+async function shareBoard(){
+  const b=cur(),email=$('#bShareEmail').value.trim(),role=$('#bShareRole').value;
+  if(!/^\S+@\S+\.\S+$/.test(email)){alert('Enter an email address.');return;}
+  const link=`${location.origin}${location.pathname}?add=${b.drive.fileId}`;
+  const msg=`I shared the Talk Board "${b.name}" with you. Open this link on your phone to add it: ${link}`;
+  $('#bShareGo').disabled=true;
+  try{await getToken(true);
+    await gfetch(`${API}/files/${b.drive.fileId}/permissions?sendNotificationEmail=true&emailMessage=${encodeURIComponent(msg)}`,
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role,type:'user',emailAddress:email})});
+    $('#bShareEmail').value='';$('#bDriveStatus').textContent=`Shared with ${email}. They'll get an email with a link.`;
+  }catch(e){$('#bDriveStatus').textContent='Could not share: '+(ERRORS[e.message]||e.message);}
+  $('#bShareGo').disabled=false;
+}
+async function addRemoteBoard(fileId){
+  const have=state.boards.find(b=>b.drive?.fileId===fileId);
+  if(have){state.current=have.id;await save();render();return true;}
+  const meta=await (await gfetch(`${API}/files/${fileId}?fields=version,capabilities(canEdit)`)).json();
+  const remote=await (await gfetch(`${API}/files/${fileId}?alt=media`)).json();
+  if(remote.app!=='talkboard-board'||!remote.board)throw new Error('That file isn\'t a Talk Board board.');
+  await unpackMedia(remote);
+  const board={...remote.board,drive:{fileId,version:meta.version,readonly:!meta.capabilities?.canEdit,syncedAt:Date.now()}};
+  const i=state.boards.findIndex(b=>b.id===board.id);
+  if(i>=0)state.boards[i]=board;else state.boards.push(board);
+  state.current=board.id;await save();setSyncState('ok');render();return true;
+}
+let gapiReady=null;
+async function openPicker(fileId){
+  await getToken(true);
+  if(!gapiReady)gapiReady=loadScript('https://apis.google.com/js/api.js').then(()=>new Promise(r=>gapi.load('picker',r)));
+  await gapiReady;
+  const view=new google.picker.DocsView(google.picker.ViewId.DOCS).setMimeTypes('application/json').setMode(google.picker.DocsViewMode.LIST);
+  if(fileId)view.setFileIds(fileId);
+  new google.picker.PickerBuilder().addView(view).setOAuthToken(gToken).setDeveloperKey(GOOGLE.apiKey).setAppId(GOOGLE.appId)
+    .setTitle('Pick a shared Talk Board').setCallback(async data=>{
+      if(data.action!==google.picker.Action.PICKED)return;
+      try{await addRemoteBoard(data.docs[0].id);}catch(e){alert(ERRORS[e.message]||e.message);}
+    }).build().setVisible(true);
+}
+async function addShared(fileId){
+  try{await getToken(true);}catch(e){return;}
+  if(fileId){try{await addRemoteBoard(fileId);return;}catch(e){if(e.message!=='gone'&&e.message!=='denied'){alert(e.message);return;}}}
+  // The app can only open files someone picked, so ask them to tap it once in Google's picker.
+  try{await openPicker(fileId);}catch(e){alert('Could not open the Google Drive picker.');}
+}
 
 /* ---------- backup ---------- */
 const blobToDataURL=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result);f.readAsDataURL(b);});
@@ -450,9 +673,18 @@ $('#boardBtn').onclick=openBoardDlg;
     sortable=Sortable.create($('#grid'),{animation:150,delay:150,delayOnTouchOnly:true,draggable:'.tile',
       ghostClass:'ghosting',disabled:true,
       onEnd(){lastDrag=Date.now();const order=[...$('#grid').querySelectorAll('.tile')].map(e=>e.dataset.id);
-        const b=cur();b.tiles.sort((a,c)=>order.indexOf(a.id)-order.indexOf(c.id));save();render();}});
+        const b=cur();b.tiles.sort((a,c)=>order.indexOf(a.id)-order.indexOf(c.id));b.orderAt=Date.now();markDirty(b);save();render();}});
   }
   render();
+  if(driveOn()){
+    initGIS().catch(()=>{});
+    try{const s=JSON.parse(lsGet('tb_token')||'null');if(s&&s.exp>Date.now()+60000){gToken=s.t;gTokenExp=s.exp;}}catch(e){}
+    const add=new URLSearchParams(location.search).get('add');
+    if(add){$('#addBanner').dataset.id=add;$('#addBanner').hidden=false;}
+    if(state.boards.some(b=>b.drive)){setSyncState(gToken?'ok':'auth');if(gToken)syncAll(false);}
+    document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncAll(false);});
+    setInterval(()=>{if(document.visibilityState==='visible')syncAll(false);},60000);
+  }
 })();
 </script>
 </body>
