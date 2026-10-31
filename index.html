@@ -53,8 +53,12 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .preview{width:120px;align-self:center;aspect-ratio:1/1;cursor:default}
 .swatches{display:flex;gap:8px;flex-wrap:wrap}
 .swatches button{width:34px;height:34px;padding:0;border-radius:50%;border:2px solid rgba(0,0,0,.15)}
-.swatches button[aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
-.symgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;font-weight:400}
+.swatches .custom{position:relative;width:34px;height:34px;border-radius:50%;border:2px solid rgba(0,0,0,.15);
+  background:conic-gradient(#ff6b6b,#ffe066,#69db7c,#4dabf7,#9775fa,#f783ac,#ff6b6b);overflow:hidden;cursor:pointer}
+.swatches .custom input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
+.swatches [aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
+.dlg>*{flex-shrink:0}
+.symgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;font-weight:400;max-height:45vh;overflow-y:auto;overscroll-behavior:contain}
 .symgrid button{background:#fff!important;padding:4px!important;aspect-ratio:1/1}
 .symgrid img{width:100%;height:100%;object-fit:contain}
 .actions{display:flex;gap:8px;align-items:center}
@@ -124,7 +128,16 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <input type="file" id="fileImport" accept=".json,application/json" hidden>
 
 <script>
-const PALETTE=['#ffffff','#fff3b0','#cdeccd','#ffd8b0','#cfe0ff','#ffd0e0','#e3d4ff','#e5e5e5'];
+const PALETTE=[
+  '#ffffff','#e5e5e5','#9e9e9e','#3a3a3a',
+  '#fff3b0','#ffe066','#ffd8b0','#ffa94d',
+  '#ffc9c9','#ff6b6b','#ffd0e0','#f783ac',
+  '#e3d4ff','#9775fa','#cfe0ff','#4dabf7',
+  '#c5f6fa','#3bc9db','#cdeccd','#69db7c',
+  '#e9dcc9','#a47148'];
+function inkFor(hex){const m=/^#?([0-9a-f]{6})$/i.exec(hex||'');if(!m)return '#1d2330';
+  const n=parseInt(m[1],16),c=[n>>16,n>>8&255,n&255].map(v=>{v/=255;return v<=.03928?v/12.92:((v+.055)/1.055)**2.4;});
+  const L=.2126*c[0]+.7152*c[1]+.0722*c[2];return L<.33?'#ffffff':'#1d2330';}
 const $=s=>document.querySelector(s);
 const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36);
 let db,state,editing=false,sortable=null,draft=null,rec=null,lastDrag=0;
@@ -173,7 +186,7 @@ function render(){
   chips.querySelector('.on')?.scrollIntoView({inline:'nearest',block:'nearest'});
 }
 function tileEl(t){
-  const el=document.createElement('button');el.className='tile';el.dataset.id=t.id;el.style.background=t.color||'#fff';
+  const el=document.createElement('button');el.className='tile';el.dataset.id=t.id;el.style.background=t.color||'#fff';el.style.color=inkFor(t.color||'#ffffff');
   const pic=document.createElement('div');pic.className='pic';
   if(t.imageId||t.imageUrl){const img=new Image();img.alt='';img.draggable=false;pic.appendChild(img);
     (t.imageId?mediaURL(t.imageId):Promise.resolve(t.imageUrl)).then(u=>{if(u)img.src=u;});}
@@ -209,10 +222,17 @@ $('#bDelete').onclick=async()=>{const b=cur();if(!confirm(`Delete "${b.name}" an
 function setSwatches(){const box=$('#tColors');box.innerHTML='';
   for(const c of PALETTE){const s=document.createElement('button');s.type='button';s.style.background=c;
     s.setAttribute('aria-pressed',draft.color===c);s.setAttribute('aria-label','color');
-    s.onclick=()=>{draft.color=c;setSwatches();refreshPreview();};box.appendChild(s);}}
+    s.onclick=()=>{draft.color=c;setSwatches();refreshPreview();};box.appendChild(s);}
+  const custom=!PALETTE.includes(draft.color);
+  const lab=document.createElement('label');lab.className='custom';lab.title='Custom colour';
+  lab.setAttribute('aria-pressed',custom);if(custom)lab.style.background=draft.color;
+  const inp=document.createElement('input');inp.type='color';inp.value=/^#[0-9a-f]{6}$/i.test(draft.color)?draft.color:'#ffffff';
+  inp.oninput=e=>{draft.color=e.target.value;lab.style.background=draft.color;lab.setAttribute('aria-pressed',true);
+    box.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',false));refreshPreview();};
+  lab.appendChild(inp);box.appendChild(lab);}
 let tempImgURL=null;
 async function refreshPreview(){
-  const p=$('#tPrev');p.style.background=draft.color;$('#tPrevLabel').textContent=draft.label;
+  const p=$('#tPrev');p.style.background=draft.color;p.style.color=inkFor(draft.color);$('#tPrevLabel').textContent=draft.label;
   const img=$('#tImg');let src=null;
   if(tempImgURL){URL.revokeObjectURL(tempImgURL);tempImgURL=null;}
   if(draft.img.kind==='id')src=await mediaURL(draft.img.value);
