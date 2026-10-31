@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f2a44">
+<title>Talk Board</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+<style>
+:root{--bg:#f6f4ef;--surface:#fff;--ink:#1d2330;--muted:#6b7280;--line:#e3dfd6;--accent:#2f5bd3;--accent-ink:#fff;--danger:#c0392b;--tile-ink:#1d2330}
+@media (prefers-color-scheme:dark){:root{--bg:#14161b;--surface:#1e2128;--ink:#eceae4;--muted:#9aa0aa;--line:#2c3039;--accent:#7a9cff;--accent-ink:#0f1320;--danger:#ff7a6b}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+button,input,select{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top))}
+#chips{flex:1;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}
+#chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 14px;font-weight:600;white-space:nowrap}
+.chip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chip.add{border-style:dashed;color:var(--muted)}
+.hbtn{flex:none;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:8px 12px;font-weight:600}
+body.editing #editBtn{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+#grid{--cols:4;display:grid;grid-template-columns:repeat(var(--cols),1fr);gap:10px;padding:12px;padding-bottom:max(24px,env(safe-area-inset-bottom))}
+.tile,.add-tile{position:relative;aspect-ratio:1/1;border-radius:14px;border:2px solid rgba(0,0,0,.12);display:flex;flex-direction:column;align-items:stretch;padding:6px;overflow:hidden;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:manipulation}
+.tile{color:var(--tile-ink);background:#fff}
+.tile .pic{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+.tile img{max-width:100%;max-height:100%;object-fit:contain;pointer-events:none}
+.tile .label{font-weight:700;font-size:clamp(12px,3.4vw,20px);text-align:center;line-height:1.1;padding-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile.noimg .pic{display:none}
+.tile.noimg .label{flex:1;display:flex;align-items:center;justify-content:center;white-space:normal;font-size:clamp(14px,4.4vw,26px)}
+.tile .badge{position:absolute;top:4px;right:6px;font-style:normal;font-weight:800;opacity:.55}
+body.editing .tile{border-style:dashed;border-color:rgba(0,0,0,.35)}
+body.editing .tile.silent::after{content:"no sound";position:absolute;left:4px;top:4px;font-size:10px;font-weight:700;background:rgba(0,0,0,.65);color:#fff;border-radius:6px;padding:1px 5px}
+.add-tile{border:2px dashed var(--line);background:transparent;color:var(--muted);align-items:center;justify-content:center}
+.add-tile span{font-size:34px;line-height:1}
+.ghosting{opacity:.35}
+#empty{text-align:center;color:var(--muted);padding:48px 24px}
+dialog{border:none;border-radius:16px;padding:0;width:min(94vw,460px);max-height:92vh;background:var(--surface);color:var(--ink)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+.dlg{padding:16px;display:flex;flex-direction:column;gap:14px;max-height:92vh;overflow:auto}
+.dlg h2{margin:0;font-size:18px}
+.field{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:14px}
+.field input,.field select{border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:10px;font-weight:400;font-size:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row input{flex:1;min-width:0}
+.dlg button{border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:9px 12px;font-weight:600}
+.dlg button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.dlg button.ghost{background:transparent}
+.dlg button.danger{color:var(--danger)}
+.dlg button.rec.on{background:var(--danger);border-color:var(--danger);color:#fff}
+.hint{margin:0;font-weight:400;font-size:13px;color:var(--muted)}
+.preview{width:120px;align-self:center;aspect-ratio:1/1;cursor:default}
+.swatches{display:flex;gap:8px;flex-wrap:wrap}
+.swatches button{width:34px;height:34px;padding:0;border-radius:50%;border:2px solid rgba(0,0,0,.15)}
+.swatches button[aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
+.symgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;font-weight:400}
+.symgrid button{background:#fff!important;padding:4px!important;aspect-ratio:1/1}
+.symgrid img{width:100%;height:100%;object-fit:contain}
+.actions{display:flex;gap:8px;align-items:center}
+.actions span{flex:1}
+</style>
+</head>
+<body>
+<header>
+  <div id="chips"></div>
+  <button class="hbtn" id="boardBtn" hidden aria-label="Board settings">⚙</button>
+  <button class="hbtn" id="editBtn">Edit</button>
+</header>
+<main>
+  <div id="grid"></div>
+  <p id="empty" hidden>This board is empty.<br>Tap <b>Edit</b>, then <b>+</b> to add tiles.</p>
+</main>
+
+<dialog id="tileDlg"><div class="dlg">
+  <h2 id="tTitle">Tile</h2>
+  <div class="tile preview" id="tPrev"><div class="pic"><img id="tImg" alt=""></div><span class="label" id="tPrevLabel"></span></div>
+  <label class="field">Label<input id="tLabel" maxlength="40" autocomplete="off" placeholder="e.g. snack"></label>
+  <div class="field">Picture
+    <div class="row">
+      <button type="button" id="tPhoto">Photo</button>
+      <button type="button" id="tSymBtn">Find symbol</button>
+      <button type="button" id="tImgRemove" class="ghost">Remove</button>
+    </div>
+    <div id="symPanel" hidden>
+      <div class="row"><input id="symQ" placeholder="search, e.g. park" enterkeyhint="search"><button type="button" id="symGo">Search</button></div>
+      <div id="symResults" class="symgrid"></div>
+      <p class="hint">Symbols by Sergio Palao, ARASAAC (CC BY-NC-SA).</p>
+    </div>
+  </div>
+  <div class="field">Sound
+    <div class="row">
+      <button type="button" id="tRec" class="rec">● Record</button>
+      <button type="button" id="tPlay">▶ Play</button>
+      <button type="button" id="tAudUpload" class="ghost">Upload</button>
+      <button type="button" id="tAudRemove" class="ghost">Remove</button>
+    </div>
+    <p class="hint" id="tAudStatus"></p>
+  </div>
+  <div class="field">Color<div id="tColors" class="swatches"></div></div>
+  <label class="field">Tapping also opens<select id="tLink"></select></label>
+  <div class="actions">
+    <button type="button" id="tDelete" class="ghost danger">Delete</button><span></span>
+    <button type="button" id="tCancel" class="ghost">Cancel</button>
+    <button type="button" id="tSave" class="primary">Save</button>
+  </div>
+</div></dialog>
+
+<dialog id="boardDlg"><div class="dlg">
+  <h2>Board</h2>
+  <label class="field">Name<input id="bName" maxlength="30"></label>
+  <label class="field">Columns: <output id="bColsOut"></output><input id="bCols" type="range" min="2" max="6" step="1"></label>
+  <button type="button" id="bDelete" class="ghost danger">Delete this board</button>
+  <div class="field">Backup
+    <p class="hint">Everything lives on this phone only. Export a backup now and then — recordings can't be recovered otherwise.</p>
+    <div class="row"><button type="button" id="bExport">Export</button><button type="button" id="bImport">Import</button></div>
+  </div>
+  <div class="actions"><span></span><button type="button" id="bDone" class="primary">Done</button></div>
+</div></dialog>
+
+<input type="file" id="fileImg" accept="image/*" hidden>
+<input type="file" id="fileAud" accept="audio/*" hidden>
+<input type="file" id="fileImport" accept=".json,application/json" hidden>
+
+<script>
+const PALETTE=['#ffffff','#fff3b0','#cdeccd','#ffd8b0','#cfe0ff','#ffd0e0','#e3d4ff','#e5e5e5'];
+const $=s=>document.querySelector(s);
+const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36);
+let db,state,editing=false,sortable=null,draft=null,rec=null,lastDrag=0;
+const player=new Audio();
+const urlCache=new Map();
+
+/* ---------- storage ---------- */
+function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open('talkboard',1);
+  r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('kv');d.createObjectStore('media');};
+  r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+function idb(store,mode,fn){return new Promise((res,rej)=>{const tx=db.transaction(store,mode);const req=fn(tx.objectStore(store));
+  tx.oncomplete=()=>res(req?req.result:undefined);tx.onerror=()=>rej(tx.error);});}
+const kvGet=k=>idb('kv','readonly',s=>s.get(k));
+const save=()=>idb('kv','readwrite',s=>s.put(state,'state'));
+const mediaGet=id=>idb('media','readonly',s=>s.get(id));
+const mediaPut=(id,b)=>idb('media','readwrite',s=>s.put(b,id));
+async function mediaDel(id){if(!id)return;await idb('media','readwrite',s=>s.delete(id));
+  if(urlCache.has(id)){URL.revokeObjectURL(urlCache.get(id));urlCache.delete(id);}}
+async function mediaURL(id){if(!id)return null;if(urlCache.has(id))return urlCache.get(id);
+  const b=await mediaGet(id);if(!b)return null;const u=URL.createObjectURL(b);urlCache.set(id,u);return u;}
+
+/* ---------- speech ---------- */
+function speak(text){if(!('speechSynthesis' in window)||!text)return;speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text);u.lang='en-US';u.rate=.95;speechSynthesis.speak(u);}
+async function playTile(t){player.pause();if('speechSynthesis' in window)speechSynthesis.cancel();
+  if(t.audioId){const u=await mediaURL(t.audioId);if(u){player.src=u;player.currentTime=0;player.play().catch(()=>{});return;}}
+  speak(t.label);}
+
+/* ---------- render ---------- */
+const cur=()=>state.boards.find(b=>b.id===state.current)||state.boards[0];
+function render(){
+  const b=cur();state.current=b.id;
+  document.body.classList.toggle('editing',editing);
+  $('#editBtn').textContent=editing?'Done':'Edit';
+  $('#boardBtn').hidden=!editing;
+  const chips=$('#chips');chips.innerHTML='';
+  for(const bd of state.boards){const c=document.createElement('button');c.className='chip'+(bd.id===b.id?' on':'');
+    c.textContent=bd.name;c.onclick=()=>{state.current=bd.id;save();render();};chips.appendChild(c);}
+  if(editing){const c=document.createElement('button');c.className='chip add';c.textContent='+ Board';c.onclick=newBoard;chips.appendChild(c);}
+  const g=$('#grid');g.style.setProperty('--cols',b.cols);g.innerHTML='';
+  for(const t of b.tiles)g.appendChild(tileEl(t));
+  if(editing){const a=document.createElement('button');a.className='add-tile';a.innerHTML='<span>+</span><small>Add tile</small>';
+    a.onclick=()=>openEditor(null);g.appendChild(a);}
+  $('#empty').hidden=editing||b.tiles.length>0;
+  if(sortable)sortable.option('disabled',!editing);
+  chips.querySelector('.on')?.scrollIntoView({inline:'nearest',block:'nearest'});
+}
+function tileEl(t){
+  const el=document.createElement('button');el.className='tile';el.dataset.id=t.id;el.style.background=t.color||'#fff';
+  const pic=document.createElement('div');pic.className='pic';
+  if(t.imageId||t.imageUrl){const img=new Image();img.alt='';img.draggable=false;pic.appendChild(img);
+    (t.imageId?mediaURL(t.imageId):Promise.resolve(t.imageUrl)).then(u=>{if(u)img.src=u;});}
+  else el.classList.add('noimg');
+  if(!t.audioId)el.classList.add('silent');
+  const l=document.createElement('span');l.className='label';l.textContent=t.label||'';
+  el.append(pic,l);
+  if(t.link){const i=document.createElement('i');i.className='badge';i.textContent='▸';el.appendChild(i);}
+  el.onclick=()=>{if(Date.now()-lastDrag<400)return;editing?openEditor(t.id):press(t,el);};
+  return el;
+}
+function press(t,el){
+  el.animate([{transform:'scale(1)'},{transform:'scale(.92)'},{transform:'scale(1)'}],{duration:220});
+  playTile(t);
+  if(t.link&&state.boards.some(b=>b.id===t.link)){state.current=t.link;save();render();}
+}
+
+/* ---------- boards ---------- */
+function newBoard(){const name=(prompt('Name for the new board')||'').trim();if(!name)return;
+  const b={id:uid(),name,cols:cur().cols||4,tiles:[]};state.boards.push(b);state.current=b.id;save();render();}
+function openBoardDlg(){const b=cur();$('#bName').value=b.name;$('#bCols').value=b.cols;$('#bColsOut').textContent=b.cols;
+  $('#bDelete').hidden=state.boards.length<2;$('#boardDlg').showModal();}
+$('#bCols').oninput=e=>{cur().cols=+e.target.value;$('#bColsOut').textContent=e.target.value;save();render();};
+$('#bName').onchange=e=>{const v=e.target.value.trim();if(v){cur().name=v;save();render();}};
+$('#bDone').onclick=()=>$('#boardDlg').close();
+$('#bDelete').onclick=async()=>{const b=cur();if(!confirm(`Delete "${b.name}" and all its tiles?`))return;
+  for(const t of b.tiles){await mediaDel(t.imageId);await mediaDel(t.audioId);}
+  state.boards=state.boards.filter(x=>x.id!==b.id);
+  for(const x of state.boards)for(const t of x.tiles)if(t.link===b.id)t.link='';
+  state.current=state.boards[0].id;await save();$('#boardDlg').close();render();};
+
+/* ---------- tile editor ---------- */
+function setSwatches(){const box=$('#tColors');box.innerHTML='';
+  for(const c of PALETTE){const s=document.createElement('button');s.type='button';s.style.background=c;
+    s.setAttribute('aria-pressed',draft.color===c);s.setAttribute('aria-label','color');
+    s.onclick=()=>{draft.color=c;setSwatches();refreshPreview();};box.appendChild(s);}}
+let tempImgURL=null;
+async function refreshPreview(){
+  const p=$('#tPrev');p.style.background=draft.color;$('#tPrevLabel').textContent=draft.label;
+  const img=$('#tImg');let src=null;
+  if(tempImgURL){URL.revokeObjectURL(tempImgURL);tempImgURL=null;}
+  if(draft.img.kind==='id')src=await mediaURL(draft.img.value);
+  else if(draft.img.kind==='blob')src=tempImgURL=URL.createObjectURL(draft.img.value);
+  else if(draft.img.kind==='url')src=draft.img.value;
+  p.classList.toggle('noimg',!src);if(src)img.src=src;else img.removeAttribute('src');
+  $('#tImgRemove').hidden=!src;
+  const a=draft.aud.kind;
+  $('#tAudStatus').textContent=a==='blob'?'New sound ready — tap Play to check it.':a==='id'?'Has a recording.':'No recording yet. It will use the phone\'s voice until you record one.';
+  $('#tAudRemove').hidden=!a;
+}
+function openEditor(id){
+  const b=cur();const t=id?b.tiles.find(x=>x.id===id):null;
+  draft={id:t?.id||null,label:t?.label||'',color:t?.color||PALETTE[0],link:t?.link||'',
+    img:t?.imageId?{kind:'id',value:t.imageId}:t?.imageUrl?{kind:'url',value:t.imageUrl}:{kind:null},
+    aud:t?.audioId?{kind:'id',value:t.audioId}:{kind:null}};
+  $('#tTitle').textContent=t?'Edit tile':'New tile';
+  $('#tLabel').value=draft.label;$('#tDelete').hidden=!t;
+  $('#symPanel').hidden=true;$('#symResults').innerHTML='';$('#symQ').value='';
+  const sel=$('#tLink');sel.innerHTML='<option value="">— nothing —</option>';
+  for(const x of state.boards)if(x.id!==b.id){const o=document.createElement('option');o.value=x.id;o.textContent=x.name;sel.appendChild(o);}
+  sel.value=draft.link;
+  setSwatches();refreshPreview();$('#tileDlg').showModal();
+}
+$('#tLabel').oninput=e=>{draft.label=e.target.value;$('#tPrevLabel').textContent=draft.label;};
+$('#tLink').onchange=e=>draft.link=e.target.value;
+$('#tPhoto').onclick=()=>$('#fileImg').click();
+$('#fileImg').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+  try{draft.img={kind:'blob',value:await shrink(f)};refreshPreview();}catch(err){alert('Could not read that image.');}};
+$('#tImgRemove').onclick=()=>{draft.img={kind:null};refreshPreview();};
+async function shrink(file,max=512){
+  const url=URL.createObjectURL(file);
+  try{const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url;});
+    const s=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
+    const c=document.createElement('canvas');c.width=Math.round(img.naturalWidth*s);c.height=Math.round(img.naturalHeight*s);
+    const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);
+    return await new Promise(r=>c.toBlob(r,'image/jpeg',.85));
+  }finally{URL.revokeObjectURL(url);}
+}
+/* symbols */
+$('#tSymBtn').onclick=()=>{const p=$('#symPanel');p.hidden=!p.hidden;if(!p.hidden){$('#symQ').value=$('#symQ').value||draft.label;$('#symQ').focus();}};
+$('#symGo').onclick=symSearch;
+$('#symQ').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();symSearch();}};
+async function symSearch(){
+  const q=$('#symQ').value.trim();if(!q)return;const box=$('#symResults');box.textContent='Searching…';
+  try{const r=await fetch(`https://api.arasaac.org/v1/pictograms/en/search/${encodeURIComponent(q)}`);
+    if(!r.ok)throw new Error(r.status);const list=await r.json();box.innerHTML='';
+    if(!list.length){box.textContent='No matches.';return;}
+    for(const p of list.slice(0,24)){const u=`https://static.arasaac.org/pictograms/${p._id}/${p._id}_300.png`;
+      const btn=document.createElement('button');btn.type='button';const im=new Image();im.loading='lazy';im.alt='';im.src=u;
+      btn.appendChild(im);btn.onclick=()=>pickSymbol(u,q);box.appendChild(btn);}
+  }catch(err){box.textContent='No matches (or no internet connection).';}
+}
+async function pickSymbol(u,q){
+  try{const r=await fetch(u);if(!r.ok)throw 0;draft.img={kind:'blob',value:await r.blob()};}
+  catch(e){draft.img={kind:'url',value:u};}
+  if(!draft.label.trim()){draft.label=q;$('#tLabel').value=q;}
+  $('#symPanel').hidden=true;refreshPreview();
+}
+/* audio */
+async function toggleRecord(){
+  const btn=$('#tRec');
+  if(rec&&rec.state==='recording'){rec.stop();return;}
+  let stream;
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});}
+  catch(e){$('#tAudStatus').textContent='Microphone blocked. Allow mic access for this site in Chrome settings.';return;}
+  const chunks=[];rec=new MediaRecorder(stream);
+  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+  rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());btn.classList.remove('on');btn.textContent='● Record';
+    if(chunks.length&&draft){draft.aud={kind:'blob',value:new Blob(chunks,{type:rec.mimeType||'audio/webm'})};refreshPreview();}};
+  rec.start();btn.classList.add('on');btn.textContent='■ Stop';$('#tAudStatus').textContent='Recording… tap Stop when done.';
+}
+function stopRecording(){if(rec&&rec.state==='recording')rec.stop();}
+$('#tRec').onclick=toggleRecord;
+$('#tPlay').onclick=async()=>{stopRecording();player.pause();
+  if(draft.aud.kind==='blob'){player.src=URL.createObjectURL(draft.aud.value);player.play().catch(()=>{});}
+  else if(draft.aud.kind==='id'){const u=await mediaURL(draft.aud.value);if(u){player.src=u;player.play().catch(()=>{});}}
+  else speak(draft.label);};
+$('#tAudUpload').onclick=()=>$('#fileAud').click();
+$('#fileAud').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;draft.aud={kind:'blob',value:f};refreshPreview();};
+$('#tAudRemove').onclick=()=>{draft.aud={kind:null};refreshPreview();};
+$('#tCancel').onclick=()=>$('#tileDlg').close();
+$('#tileDlg').addEventListener('close',()=>{stopRecording();draft=null;});
+$('#tSave').onclick=async()=>{
+  stopRecording();
+  if(rec&&rec.state==='recording')await new Promise(r=>setTimeout(r,200));
+  const label=draft.label.trim();
+  if(!label&&!draft.img.kind){alert('Add a label or a picture.');return;}
+  const b=cur();let t=draft.id?b.tiles.find(x=>x.id===draft.id):null;
+  if(!t){t={id:uid()};b.tiles.push(t);}
+  const oldImg=t.imageId,oldAud=t.audioId;
+  t.label=label;t.color=draft.color;t.link=draft.link;
+  if(draft.img.kind==='blob'){t.imageId=uid();await mediaPut(t.imageId,draft.img.value);t.imageUrl=null;}
+  else if(draft.img.kind==='url'){t.imageId=null;t.imageUrl=draft.img.value;}
+  else if(draft.img.kind!=='id'){t.imageId=null;t.imageUrl=null;}
+  if(draft.aud.kind==='blob'){t.audioId=uid();await mediaPut(t.audioId,draft.aud.value);}
+  else if(draft.aud.kind!=='id')t.audioId=null;
+  if(oldImg&&oldImg!==t.imageId)await mediaDel(oldImg);
+  if(oldAud&&oldAud!==t.audioId)await mediaDel(oldAud);
+  await save();$('#tileDlg').close();render();
+};
+$('#tDelete').onclick=async()=>{const b=cur();const t=b.tiles.find(x=>x.id===draft.id);if(!t)return;
+  if(!confirm(`Delete "${t.label||'this tile'}"?`))return;
+  await mediaDel(t.imageId);await mediaDel(t.audioId);b.tiles=b.tiles.filter(x=>x!==t);
+  await save();$('#tileDlg').close();render();};
+
+/* ---------- backup ---------- */
+const blobToDataURL=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result);f.readAsDataURL(b);});
+$('#bExport').onclick=async()=>{
+  const media={};
+  for(const b of state.boards)for(const t of b.tiles)for(const id of [t.imageId,t.audioId])
+    if(id){const blob=await mediaGet(id);if(blob)media[id]=await blobToDataURL(blob);}
+  const out=new Blob([JSON.stringify({app:'talkboard',version:1,state,media})],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(out);
+  a.download=`talk-board-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+};
+$('#bImport').onclick=()=>$('#fileImport').click();
+$('#fileImport').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+  try{const data=JSON.parse(await f.text());if(data.app!=='talkboard'||!data.state?.boards?.length)throw 0;
+    if(!confirm('Replace everything on this phone with this backup?'))return;
+    await idb('media','readwrite',s=>s.clear());
+    for(const u of urlCache.values())URL.revokeObjectURL(u);urlCache.clear();
+    for(const [id,d] of Object.entries(data.media||{}))await mediaPut(id,await (await fetch(d)).blob());
+    state=data.state;await save();$('#boardDlg').close();render();
+  }catch(err){alert('That file isn\'t a Talk Board backup.');}
+};
+
+/* ---------- init ---------- */
+$('#editBtn').onclick=()=>{editing=!editing;render();};
+$('#boardBtn').onclick=openBoardDlg;
+(async()=>{
+  db=await openDB();
+  state=await kvGet('state')||{boards:[{id:uid(),name:'Home',cols:4,tiles:[]}],current:null};
+  if(navigator.storage?.persist)navigator.storage.persist().catch(()=>{});
+  if(window.Sortable){
+    sortable=Sortable.create($('#grid'),{animation:150,delay:150,delayOnTouchOnly:true,draggable:'.tile',
+      ghostClass:'ghosting',disabled:true,
+      onEnd(){lastDrag=Date.now();const order=[...$('#grid').querySelectorAll('.tile')].map(e=>e.dataset.id);
+        const b=cur();b.tiles.sort((a,c)=>order.indexOf(a.id)-order.indexOf(c.id));save();render();}});
+  }
+  render();
+})();
+</script>
+</body>
+</html>
