@@ -61,6 +61,11 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .swatches .custom input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
 .swatches [aria-pressed=true]{outline:3px solid var(--accent);outline-offset:2px}
 .dlg>*{flex-shrink:0}
+#cropDlg{width:min(96vw,560px)}
+.cropArea{height:min(55vh,460px);background:#222;border-radius:10px;overflow:hidden}
+.cropArea img{display:block;max-width:100%}
+.tools button{min-width:44px}
+.tools button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 [hidden]{display:none!important}
 #bShare input{flex:1 1 100%}
 .dlg select{border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:9px;font-weight:400}
@@ -101,6 +106,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="row">
       <button type="button" id="tPhoto">Photo</button>
       <button type="button" id="tSymBtn">Find symbol</button>
+      <button type="button" id="tImgEdit">✎ Edit</button>
       <button type="button" id="tImgRemove" class="ghost">Remove</button>
     </div>
     <div id="symPanel" hidden>
@@ -126,6 +132,25 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <button type="button" id="tDelete" class="ghost danger">Delete</button><span></span>
     <button type="button" id="tCancel" class="ghost">Cancel</button>
     <button type="button" id="tSave" class="primary">Save</button>
+  </div>
+</div></dialog>
+
+<dialog id="cropDlg"><div class="dlg">
+  <h2>Edit picture</h2>
+  <div class="cropArea"><img id="cropImg" alt=""></div>
+  <p class="hint">Drag to move. Pinch or use − / + to zoom. Drag the corners to crop.</p>
+  <div class="row tools">
+    <button type="button" data-act="rotL" aria-label="Rotate left">↺</button>
+    <button type="button" data-act="rotR" aria-label="Rotate right">↻</button>
+    <button type="button" data-act="flip">⇋ Flip</button>
+    <button type="button" data-act="out" aria-label="Zoom out">−</button>
+    <button type="button" data-act="in" aria-label="Zoom in">+</button>
+    <button type="button" data-act="square" id="cropSquare">□ Square</button>
+    <button type="button" data-act="reset" class="ghost">Reset</button>
+  </div>
+  <div class="actions"><span></span>
+    <button type="button" id="cropCancel" class="ghost">Cancel</button>
+    <button type="button" id="cropApply" class="primary">Apply</button>
   </div>
 </div></dialog>
 
@@ -298,7 +323,7 @@ async function refreshPreview(){
   else if(draft.img.kind==='blob')src=tempImgURL=URL.createObjectURL(draft.img.value);
   else if(draft.img.kind==='url')src=draft.img.value;
   p.classList.toggle('noimg',!src);if(src)img.src=src;else img.removeAttribute('src');
-  $('#tImgRemove').hidden=!src;
+  $('#tImgRemove').hidden=!src;$('#tImgEdit').hidden=!(draft.img.kind==='blob'||draft.img.kind==='id');
   const a=draft.aud.kind;
   $('#tAudStatus').textContent=a==='blob'?'New sound ready — tap Play to check it.':a==='id'?'Has a recording.':'No recording yet. It will use the phone\'s voice until you record one.';
   $('#tAudRemove').hidden=!a;$('#tTrim').hidden=!a;
@@ -320,8 +345,62 @@ $('#tLabel').oninput=e=>{draft.label=e.target.value;$('#tPrevLabel').textContent
 $('#tLink').onchange=e=>draft.link=e.target.value;
 $('#tPhoto').onclick=()=>$('#fileImg').click();
 $('#fileImg').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
-  try{draft.img={kind:'blob',value:await shrink(f)};refreshPreview();}catch(err){alert('Could not read that image.');}};
-$('#tImgRemove').onclick=()=>{draft.img={kind:null};refreshPreview();};
+  try{draft.img={kind:'blob',value:await shrink(f)};draft.imgSrc=f;draft.crop=null;refreshPreview();}catch(err){alert('Could not read that image.');}};
+$('#tImgRemove').onclick=()=>{draft.img={kind:null};draft.imgSrc=null;refreshPreview();};
+/* picture editor */
+let cropper=null,cropURL=null,cropType='image/jpeg',cropperReady=null;
+function loadCropper(){
+  if(!cropperReady)cropperReady=new Promise((res,rej)=>{
+    const l=document.createElement('link');l.rel='stylesheet';l.href='https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.css';document.head.appendChild(l);
+    const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.js';
+    s.onload=res;s.onerror=()=>{cropperReady=null;rej();};document.head.appendChild(s);});
+  return cropperReady;
+}
+async function openCrop(){
+  // Edit from the full-size original when we still have it, so cropping in doesn't get blurry.
+  const src=draft.imgSrc||(draft.img.kind==='blob'?draft.img.value:draft.img.kind==='id'?await mediaGet(draft.img.value):null);
+  if(!src)return;
+  try{await loadCropper();}catch(e){alert('The picture editor needs an internet connection the first time.');return;}
+  cropType=/png|gif|webp|svg/.test(src.type)?'image/png':'image/jpeg';
+  if(!draft.imgSrc)draft.imgSrc=src;
+  cropURL=URL.createObjectURL(src);
+  const img=$('#cropImg'),saved=draft.crop;
+  $('#cropSquare').setAttribute('aria-pressed',!!saved?.square);
+  $('#cropDlg').showModal();
+  img.onload=()=>{cropper?.destroy();
+    cropper=new Cropper(img,{viewMode:1,dragMode:'move',autoCropArea:1,background:false,checkOrientation:false,
+      toggleDragModeOnDblclick:false,aspectRatio:saved?.square?1:NaN,
+      ready(){if(saved)this.cropper.setData(saved.data);}});};
+  img.src=cropURL;
+}
+function closeCrop(){cropper?.destroy();cropper=null;if(cropURL){URL.revokeObjectURL(cropURL);cropURL=null;}$('#cropImg').removeAttribute('src');}
+$('#tImgEdit').onclick=openCrop;
+$('#cropDlg').addEventListener('close',closeCrop);
+$('#cropCancel').onclick=()=>$('#cropDlg').close();
+document.querySelector('#cropDlg .tools').onclick=e=>{
+  const a=e.target.closest('button')?.dataset.act;if(!a||!cropper)return;
+  const d=cropper.getData();
+  if(a==='rotL')cropper.rotate(-90);else if(a==='rotR')cropper.rotate(90);
+  else if(a==='flip')cropper.scaleX(-(d.scaleX||1));
+  else if(a==='in')cropper.zoom(.1);else if(a==='out')cropper.zoom(-.1);
+  else if(a==='square'){const b=$('#cropSquare'),on=b.getAttribute('aria-pressed')!=='true';b.setAttribute('aria-pressed',on);cropper.setAspectRatio(on?1:NaN);}
+  else if(a==='reset'){cropper.reset();$('#cropSquare').setAttribute('aria-pressed',false);cropper.setAspectRatio(NaN);}
+};
+$('#cropApply').onclick=async()=>{
+  if(!cropper)return;
+  // Cropper's own maxWidth option shrinks too far on rotated images, so scale down ourselves.
+  const full=cropper.getCroppedCanvas({imageSmoothingQuality:'high'});
+  const s=Math.min(1,512/Math.max(full.width,full.height));
+  const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(full.width*s));canvas.height=Math.max(1,Math.round(full.height*s));
+  const ctx=canvas.getContext('2d');
+  if(cropType==='image/jpeg'){ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);}
+  ctx.imageSmoothingQuality='high';ctx.drawImage(full,0,0,canvas.width,canvas.height);
+  const blob=await new Promise(r=>canvas.toBlob(r,cropType,.88));
+  if(!blob){alert('Could not save the edited picture.');return;}
+  draft.crop={data:cropper.getData(),square:$('#cropSquare').getAttribute('aria-pressed')==='true'};
+  draft.img={kind:'blob',value:blob};
+  $('#cropDlg').close();refreshPreview();
+};
 async function shrink(file,max=512){
   const url=URL.createObjectURL(file);
   try{const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url;});
@@ -346,8 +425,9 @@ async function symSearch(){
   }catch(err){box.textContent='No matches (or no internet connection).';}
 }
 async function pickSymbol(u,q){
-  try{const r=await fetch(u);if(!r.ok)throw 0;draft.img={kind:'blob',value:await r.blob()};}
-  catch(e){draft.img={kind:'url',value:u};}
+  try{const r=await fetch(u);if(!r.ok)throw 0;const bl=await r.blob();draft.img={kind:'blob',value:bl};draft.imgSrc=bl;}
+  catch(e){draft.img={kind:'url',value:u};draft.imgSrc=null;}
+  draft.crop=null;
   if(!draft.label.trim()){draft.label=q;$('#tLabel').value=q;}
   $('#symPanel').hidden=true;refreshPreview();
 }
