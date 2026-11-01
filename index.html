@@ -229,10 +229,20 @@ async function mediaURL(id){if(!id)return null;if(urlCache.has(id))return urlCac
 function speak(text){if(!('speechSynthesis' in window)||!text)return;speechSynthesis.cancel();
   const u=new SpeechSynthesisUtterance(text);u.lang='en-US';u.rate=.95;speechSynthesis.speak(u);}
 async function playTile(t){player.pause();if('speechSynthesis' in window)speechSynthesis.cancel();
-  if(t.audioId){const u=await mediaURL(t.audioId);if(u){player.src=u;player.currentTime=0;player.play().catch(()=>{});return;}}
+  const aid=voiceOf(t);
+  if(aid){const u=await mediaURL(aid);if(u){player.src=u;player.currentTime=0;player.play().catch(()=>{});return;}}
   speak(t.label);}
 
 /* ---------- render ---------- */
+const voiceOf=t=>state.voice?.[t.id];
+// Recordings used to live on tiles (and got synced). Move them to this phone's own list.
+function normalize(){
+  if(!state.voice)state.voice={};
+  for(const b of state.boards){let moved=false;
+    for(const t of b.tiles)if('audioId' in t){if(t.audioId&&!state.voice[t.id])state.voice[t.id]=t.audioId;delete t.audioId;moved=true;}
+    if(moved&&b.drive)b.drive.dirty=true;}
+}
+const stripVoice=board=>{for(const t of board.tiles||[])delete t.audioId;};
 const cur=()=>state.boards.find(b=>b.id===state.current)||state.boards[0];
 function render(){
   const b=cur();state.current=b.id;
@@ -258,7 +268,7 @@ function tileEl(t){
   if(t.imageId||t.imageUrl){const img=new Image();img.alt='';img.draggable=false;pic.appendChild(img);
     (t.imageId?mediaURL(t.imageId):Promise.resolve(t.imageUrl)).then(u=>{if(u)img.src=u;});}
   else el.classList.add('noimg');
-  if(!t.audioId)el.classList.add('silent');
+  if(!voiceOf(t))el.classList.add('silent');
   const l=document.createElement('span');l.className='label';l.textContent=t.label||'';
   el.append(pic,l);
   if(t.link){const i=document.createElement('i');i.className='badge';i.textContent='▸';el.appendChild(i);}
@@ -290,7 +300,7 @@ $('#bName').onchange=e=>{const v=e.target.value.trim();const b=cur();if(v){b.nam
 $('#bDone').onclick=()=>$('#boardDlg').close();
 $('#bDelete').onclick=async()=>{const b=cur();
   if(!confirm(b.drive?`Remove "${b.name}" from this phone? The Google Drive copy is kept.`:`Delete "${b.name}" and all its tiles?`))return;
-  for(const t of b.tiles){await mediaDel(t.imageId);await mediaDel(t.audioId);}
+  for(const t of b.tiles){await mediaDel(t.imageId);await mediaDel(voiceOf(t));delete state.voice[t.id];}
   state.boards=state.boards.filter(x=>x.id!==b.id);
   for(const x of state.boards)for(const t of x.tiles)if(t.link===b.id)t.link='';
   state.current=state.boards[0].id;await save();$('#boardDlg').close();render();};
@@ -332,7 +342,7 @@ function openEditor(id){
   const b=cur();const t=id?b.tiles.find(x=>x.id===id):null;
   draft={id:t?.id||null,label:t?.label||'',color:t?.color||PALETTE[0],link:t?.link||'',type:t?.type||'',
     img:t?.imageId?{kind:'id',value:t.imageId}:t?.imageUrl?{kind:'url',value:t.imageUrl}:{kind:null},
-    aud:t?.audioId?{kind:'id',value:t.audioId}:{kind:null}};
+    aud:t&&voiceOf(t)?{kind:'id',value:voiceOf(t)}:{kind:null}};
   $('#tTitle').textContent=t?'Edit tile':'New tile';
   $('#tLabel').value=draft.label;$('#tDelete').hidden=!t;
   $('#symPanel').hidden=true;$('#symResults').innerHTML='';$('#symQ').value='';
@@ -515,21 +525,26 @@ $('#tSave').onclick=async()=>{
   const label=draft.label.trim();
   if(!label&&!draft.img.kind){alert('Add a label or a picture.');return;}
   const b=cur();let t=draft.id?b.tiles.find(x=>x.id===draft.id):null;
-  if(!t){t={id:uid()};b.tiles.push(t);}
-  const oldImg=t.imageId,oldAud=t.audioId;
-  t.label=label;t.color=draft.color;t.link=draft.link;t.type=draft.type;t.updatedAt=Date.now();
+  const isNew=!t;if(!t){t={id:uid()};b.tiles.push(t);}
+  const sig=()=>JSON.stringify([t.label||'',t.color||PALETTE[0],t.link||'',t.type||'',t.imageId||null,t.imageUrl||null]);
+  const shared=sig();
+  const oldImg=t.imageId,oldAud=voiceOf(t);
+  t.label=label;t.color=draft.color;t.link=draft.link;t.type=draft.type;
   if(draft.img.kind==='blob'){t.imageId=uid();await mediaPut(t.imageId,draft.img.value);t.imageUrl=null;}
   else if(draft.img.kind==='url'){t.imageId=null;t.imageUrl=draft.img.value;}
   else if(draft.img.kind!=='id'){t.imageId=null;t.imageUrl=null;}
-  if(draft.aud.kind==='blob'){t.audioId=uid();await mediaPut(t.audioId,draft.aud.value);}
-  else if(draft.aud.kind!=='id')t.audioId=null;
+  // Recordings are personal: kept on this phone only, never synced.
+  if(draft.aud.kind==='blob'){const id=uid();await mediaPut(id,draft.aud.value);state.voice[t.id]=id;}
+  else if(draft.aud.kind!=='id')delete state.voice[t.id];
   if(oldImg&&oldImg!==t.imageId)await mediaDel(oldImg);
-  if(oldAud&&oldAud!==t.audioId)await mediaDel(oldAud);
-  markDirty(b);await save();$('#tileDlg').close();render();
+  if(oldAud&&oldAud!==voiceOf(t))await mediaDel(oldAud);
+  // Only sync when something shared changed, not when just the recording did.
+  if(isNew||shared!==sig()){t.updatedAt=Date.now();markDirty(b);}
+  await save();$('#tileDlg').close();render();
 };
 $('#tDelete').onclick=async()=>{const b=cur();const t=b.tiles.find(x=>x.id===draft.id);if(!t)return;
   if(!confirm(`Delete "${t.label||'this tile'}"?`))return;
-  await mediaDel(t.imageId);await mediaDel(t.audioId);b.tiles=b.tiles.filter(x=>x!==t);
+  await mediaDel(t.imageId);await mediaDel(voiceOf(t));delete state.voice[t.id];b.tiles=b.tiles.filter(x=>x!==t);
   (b.deleted||(b.deleted={}))[t.id]=Date.now();markDirty(b);await save();$('#tileDlg').close();render();};
 
 /* ---------- Google Drive sync ---------- */
@@ -574,8 +589,7 @@ async function gfetch(url,opts={}){
 }
 async function packBoard(b){
   const media={};
-  for(const t of b.tiles)for(const id of [t.imageId,t.audioId])
-    if(id){const blob=await mediaGet(id);if(blob)media[id]=await blobToDataURL(blob);}
+  for(const t of b.tiles)if(t.imageId){const blob=await mediaGet(t.imageId);if(blob)media[t.imageId]=await blobToDataURL(blob);}
   const {drive,...board}=b;
   return new Blob([JSON.stringify({app:'talkboard-board',version:1,board,media})],{type:'application/json'});
 }
@@ -620,7 +634,7 @@ async function syncBoard(b){
   d.readonly=!meta.capabilities?.canEdit;
   let upload=!!d.dirty&&!d.readonly;
   if(meta.version!==d.version){
-    const remote=await (await gfetch(`${API}/files/${d.fileId}?alt=media`)).json();
+    const remote=await (await gfetch(`${API}/files/${d.fileId}?alt=media`)).json();stripVoice(remote.board);
     await unpackMedia(remote);
     const merged=mergeBoards(b,remote.board);
     for(const k of Object.keys(b))if(k!=='drive')delete b[k];
@@ -636,7 +650,7 @@ function markDirty(b){
   clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncAll(false),3000);
 }
 async function gcMedia(){
-  const keep=new Set();for(const b of state.boards)for(const t of b.tiles){keep.add(t.imageId);keep.add(t.audioId);}
+  const keep=new Set(Object.values(state.voice));for(const b of state.boards)for(const t of b.tiles)keep.add(t.imageId);
   const keys=await idb('media','readonly',s=>s.getAllKeys());
   for(const k of keys)if(!keep.has(k))await mediaDel(k);
 }
@@ -695,7 +709,7 @@ async function addRemoteBoard(fileId){
   const have=state.boards.find(b=>b.drive?.fileId===fileId);
   if(have){state.current=have.id;await save();render();return true;}
   const meta=await (await gfetch(`${API}/files/${fileId}?fields=version,capabilities(canEdit)`)).json();
-  const remote=await (await gfetch(`${API}/files/${fileId}?alt=media`)).json();
+  const remote=await (await gfetch(`${API}/files/${fileId}?alt=media`)).json();if(remote.board)stripVoice(remote.board);
   if(remote.app!=='talkboard-board'||!remote.board)throw new Error('That file isn\'t a Talk Board board.');
   await unpackMedia(remote);
   const board={...remote.board,drive:{fileId,version:meta.version,readonly:!meta.capabilities?.canEdit,syncedAt:Date.now()}};
@@ -727,7 +741,7 @@ async function addShared(fileId){
 const blobToDataURL=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result);f.readAsDataURL(b);});
 $('#bExport').onclick=async()=>{
   const media={};
-  for(const b of state.boards)for(const t of b.tiles)for(const id of [t.imageId,t.audioId])
+  for(const id of [...state.boards.flatMap(b=>b.tiles.map(t=>t.imageId)),...Object.values(state.voice)])
     if(id){const blob=await mediaGet(id);if(blob)media[id]=await blobToDataURL(blob);}
   const out=new Blob([JSON.stringify({app:'talkboard',version:1,state,media})],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(out);
@@ -741,7 +755,7 @@ $('#fileImport').onchange=async e=>{const f=e.target.files[0];e.target.value='';
     await idb('media','readwrite',s=>s.clear());
     for(const u of urlCache.values())URL.revokeObjectURL(u);urlCache.clear();
     for(const [id,d] of Object.entries(data.media||{}))await mediaPut(id,await (await fetch(d)).blob());
-    state=data.state;await save();$('#boardDlg').close();render();
+    state=data.state;normalize();await save();$('#boardDlg').close();render();
   }catch(err){alert('That file isn\'t a Talk Board backup.');}
 };
 
@@ -751,6 +765,7 @@ $('#boardBtn').onclick=openBoardDlg;
 (async()=>{
   db=await openDB();
   state=await kvGet('state')||{boards:[{id:uid(),name:'Home',cols:4,tiles:[]}],current:null};
+  normalize();
   if(navigator.storage?.persist)navigator.storage.persist().catch(()=>{});
   if(window.Sortable){
     sortable=Sortable.create($('#grid'),{animation:150,delay:150,delayOnTouchOnly:true,draggable:'.tile',
