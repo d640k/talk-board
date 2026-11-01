@@ -534,7 +534,10 @@ $('#tDelete').onclick=async()=>{const b=cur();const t=b.tiles.find(x=>x.id===dra
 
 /* ---------- Google Drive sync ---------- */
 // Fill these in from Google Cloud Console (see setup steps). Leave clientId empty to hide Drive features.
-const GOOGLE={clientId:'',apiKey:'',appId:''};
+const GOOGLE={
+  clientId:'51388586652-87th3555dcca5qvdfi0eqv8jid2dsqov.apps.googleusercontent.com',
+  apiKey:'AIzaSyCVJgEjvrea_poB67iWYD6h5ijdF-iuEog',
+  appId:'51388586652'};
 const driveOn=()=>!!GOOGLE.clientId;
 const API='https://www.googleapis.com/drive/v3',UP='https://www.googleapis.com/upload/drive/v3';
 let gToken=null,gTokenExp=0,tokenClient=null,gisReady=null,syncTimer=null,syncing=false,syncState='';
