@@ -169,7 +169,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       <select id="bShareRole"><option value="writer">Can edit</option><option value="reader">View only</option></select>
       <button type="button" id="bShareGo">Share</button>
     </div>
-    <div class="row"><button type="button" id="bAddShared" class="ghost">Add a board someone shared with you</button></div>
+    <div class="row"><button type="button" id="bAddShared" class="ghost">Add a board from Google Drive</button></div>
+    <p class="hint" id="bVoiceStatus"></p>
+    <div class="row"><button type="button" id="bVoiceBackup">Back up my recordings</button></div>
   </div>
   <button type="button" id="bDelete" class="ghost danger">Delete this board</button>
   <div class="field">Backup
@@ -241,6 +243,18 @@ function normalize(){
   for(const b of state.boards){let moved=false;
     for(const t of b.tiles)if('audioId' in t){if(t.audioId&&!state.voice[t.id])state.voice[t.id]=t.audioId;delete t.audioId;moved=true;}
     if(moved&&b.drive)b.drive.dirty=true;}
+  if(!state.voiceMeta)state.voiceMeta={};
+  for(const id of Object.keys(state.voice))if(!state.voiceMeta[id])state.voiceMeta[id]={at:Date.now(),pending:true};
+}
+// Change this phone's recording for a tile (null removes it) and queue a private backup.
+async function setVoice(tileId,audioId){
+  const old=state.voice[tileId];
+  if(old&&old!==audioId)await mediaDel(old);
+  if(audioId)state.voice[tileId]=audioId;else delete state.voice[tileId];
+  const m=state.voiceMeta[tileId];
+  if(!audioId&&!m?.fileId){delete state.voiceMeta[tileId];return;}
+  state.voiceMeta[tileId]={at:Date.now(),fileId:m?.fileId||null,pending:true,removed:!audioId};
+  if(typeof scheduleSync==='function')scheduleSync();
 }
 const stripVoice=board=>{for(const t of board.tiles||[])delete t.audioId;};
 const cur=()=>state.boards.find(b=>b.id===state.current)||state.boards[0];
@@ -290,6 +304,7 @@ function openBoardDlg(){const b=cur();$('#bName').value=b.name;$('#bCols').value
   refreshDriveUI();$('#boardDlg').showModal();}
 $('#bDriveSave').onclick=saveToDrive;
 $('#bSyncNow').onclick=()=>syncAll(true);
+$('#bVoiceBackup').onclick=async()=>{try{await getToken(true);}catch(e){return;}await syncAll(false);refreshDriveUI();};
 $('#bShareGo').onclick=shareBoard;
 $('#bAddShared').onclick=()=>{$('#boardDlg').close();addShared(null);};
 $('#syncBtn').onclick=()=>syncAll(true);
@@ -300,7 +315,7 @@ $('#bName').onchange=e=>{const v=e.target.value.trim();const b=cur();if(v){b.nam
 $('#bDone').onclick=()=>$('#boardDlg').close();
 $('#bDelete').onclick=async()=>{const b=cur();
   if(!confirm(b.drive?`Remove "${b.name}" from this phone? The Google Drive copy is kept.`:`Delete "${b.name}" and all its tiles?`))return;
-  for(const t of b.tiles){await mediaDel(t.imageId);await mediaDel(voiceOf(t));delete state.voice[t.id];}
+  for(const t of b.tiles){await mediaDel(t.imageId);await setVoice(t.id,null);}
   state.boards=state.boards.filter(x=>x.id!==b.id);
   for(const x of state.boards)for(const t of x.tiles)if(t.link===b.id)t.link='';
   state.current=state.boards[0].id;await save();$('#boardDlg').close();render();};
@@ -534,17 +549,16 @@ $('#tSave').onclick=async()=>{
   else if(draft.img.kind==='url'){t.imageId=null;t.imageUrl=draft.img.value;}
   else if(draft.img.kind!=='id'){t.imageId=null;t.imageUrl=null;}
   // Recordings are personal: kept on this phone only, never synced.
-  if(draft.aud.kind==='blob'){const id=uid();await mediaPut(id,draft.aud.value);state.voice[t.id]=id;}
-  else if(draft.aud.kind!=='id')delete state.voice[t.id];
+  if(draft.aud.kind==='blob'){const id=uid();await mediaPut(id,draft.aud.value);await setVoice(t.id,id);}
+  else if(draft.aud.kind!=='id')await setVoice(t.id,null);
   if(oldImg&&oldImg!==t.imageId)await mediaDel(oldImg);
-  if(oldAud&&oldAud!==voiceOf(t))await mediaDel(oldAud);
   // Only sync when something shared changed, not when just the recording did.
   if(isNew||shared!==sig()){t.updatedAt=Date.now();markDirty(b);}
   await save();$('#tileDlg').close();render();
 };
 $('#tDelete').onclick=async()=>{const b=cur();const t=b.tiles.find(x=>x.id===draft.id);if(!t)return;
   if(!confirm(`Delete "${t.label||'this tile'}"?`))return;
-  await mediaDel(t.imageId);await mediaDel(voiceOf(t));delete state.voice[t.id];b.tiles=b.tiles.filter(x=>x!==t);
+  await mediaDel(t.imageId);await setVoice(t.id,null);b.tiles=b.tiles.filter(x=>x!==t);
   (b.deleted||(b.deleted={}))[t.id]=Date.now();markDirty(b);await save();$('#tileDlg').close();render();};
 
 /* ---------- Google Drive sync ---------- */
@@ -599,7 +613,7 @@ async function unpackMedia(remote){
 }
 function multipart(meta,blob){const bd='tb'+uid();
   return {type:`multipart/related; boundary=${bd}`,body:new Blob([
-    `--${bd}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${bd}\r\nContent-Type: application/json\r\n\r\n`,
+    `--${bd}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${bd}\r\nContent-Type: ${meta.mimeType||'application/json'}\r\n\r\n`,
     blob,`\r\n--${bd}--`])};}
 async function uploadBoard(b){
   const blob=await packBoard(b),id=b.drive?.fileId;
@@ -645,9 +659,62 @@ async function syncBoard(b){
   if(upload){const r=await uploadBoard(b);d.version=r.version;}
   d.dirty=(d.dirtyAt||0)>started;d.syncedAt=Date.now();d.error='';
 }
+function scheduleSync(){clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncAll(false),3000);}
 function markDirty(b){
-  if(!b.drive)return;b.drive.dirty=true;b.drive.dirtyAt=Date.now();
-  clearTimeout(syncTimer);syncTimer=setTimeout(()=>syncAll(false),3000);
+  if(!b.drive)return;b.drive.dirty=true;b.drive.dirtyAt=Date.now();scheduleSync();
+}
+/* Private recording backup: each recording is its own small file in a private Drive folder. */
+const signedIn=()=>!!lsGet('tb_google');
+async function driveFind(kind){
+  const out=[];let page='';
+  do{const q=encodeURIComponent(`appProperties has { key='talkboard' and value='${kind}' } and trashed=false`);
+    const r=await (await gfetch(`${API}/files?q=${q}&fields=nextPageToken,files(id,appProperties)&pageSize=1000${page?'&pageToken='+page:''}`)).json();
+    out.push(...r.files);page=r.nextPageToken;}while(page);
+  return out;
+}
+async function voiceFolder(){
+  if(state.voiceFolder)return state.voiceFolder;
+  const found=await driveFind('voicefolder');
+  if(found.length)return state.voiceFolder=found[0].id;
+  const r=await (await gfetch(`${API}/files?fields=id`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:'Talk Board – my recordings (private)',mimeType:'application/vnd.google-apps.folder',appProperties:{talkboard:'voicefolder'}})})).json();
+  return state.voiceFolder=r.id;
+}
+async function driveDelete(id){try{await gfetch(`${API}/files/${id}`,{method:'DELETE'});}catch(e){if(e.message==='auth')throw e;}}
+function tileLabel(id){for(const b of state.boards)for(const t of b.tiles)if(t.id===id)return t.label||'tile';return 'tile';}
+async function syncVoice(){
+  let folder;
+  try{folder=await voiceFolder();}catch(e){if(e.message==='gone'){state.voiceFolder=null;folder=await voiceFolder();}else throw e;}
+  const remote={};
+  for(const f of await driveFind('voice')){const tile=f.appProperties.tile,at=+f.appProperties.at||0;
+    const r=remote[tile];
+    if(!r||at>r.at){if(r)await driveDelete(r.id);remote[tile]={id:f.id,at};}else await driveDelete(f.id);}
+  const tiles=new Set([...Object.keys(state.voiceMeta),...Object.keys(remote)]);
+  for(const tile of tiles){
+    const L=state.voiceMeta[tile],R=remote[tile];
+    if(L?.pending&&L.at>=(R?.at||0)){
+      if(L.removed){if(L.fileId)await driveDelete(L.fileId);if(R&&R.id!==L.fileId)await driveDelete(R.id);delete state.voiceMeta[tile];continue;}
+      const blob=await mediaGet(state.voice[tile]);
+      if(!blob){delete state.voiceMeta[tile];continue;}
+      const m=multipart({name:`${tileLabel(tile)}.${/webm/.test(blob.type)?'webm':'wav'}`,parents:[folder],mimeType:blob.type||'audio/wav',
+        appProperties:{talkboard:'voice',tile,at:String(L.at)}},blob);
+      const r=await (await gfetch(`${UP}/files?uploadType=multipart&fields=id`,{method:'POST',headers:{'Content-Type':m.type},body:m.body})).json();
+      if(L.fileId&&L.fileId!==r.id)await driveDelete(L.fileId);
+      if(R&&R.id!==r.id&&R.id!==L.fileId)await driveDelete(R.id);
+      state.voiceMeta[tile]={at:L.at,fileId:r.id};
+    }else if(R&&R.id!==L?.fileId){
+      // Newer recording made on another of your devices.
+      const blob=await (await gfetch(`${API}/files/${R.id}?alt=media`)).blob();
+      const id=uid();await mediaPut(id,blob);
+      const old=state.voice[tile];if(old)await mediaDel(old);
+      state.voice[tile]=id;state.voiceMeta[tile]={at:R.at,fileId:R.id};
+    }else if(!R&&L?.fileId&&!L.pending){
+      // You removed it on another device.
+      const old=state.voice[tile];if(old)await mediaDel(old);
+      delete state.voice[tile];delete state.voiceMeta[tile];
+    }
+  }
+  state.voiceSyncedAt=Date.now();
 }
 async function gcMedia(){
   const keep=new Set(Object.values(state.voice));for(const b of state.boards)for(const t of b.tiles)keep.add(t.imageId);
@@ -657,13 +724,15 @@ async function gcMedia(){
 async function syncAll(interactive){
   if(!driveOn()||syncing)return;
   const list=state.boards.filter(b=>b.drive);
-  if(!list.length){setSyncState('');return;}
+  if(!list.length&&!signedIn()){setSyncState('');return;}
   syncing=true;setSyncState('syncing');
   try{
     if(interactive)await getToken(true);
     for(const b of list){try{await syncBoard(b);}catch(e){if(e.message==='auth')throw e;b.drive.error=e.message;}}
+    let voiceErr=false;
+    try{await syncVoice();state.voiceError='';}catch(e){if(e.message==='auth')throw e;state.voiceError=e.message;voiceErr=true;}
     await save();await gcMedia();
-    setSyncState(list.some(b=>b.drive.error)?'error':'ok');
+    setSyncState(voiceErr||list.some(b=>b.drive.error)?'error':'ok');
   }catch(e){setSyncState(e.message==='auth'?'auth':'error');}
   finally{syncing=false;}
   if(!$('#tileDlg').open)render();
@@ -681,6 +750,13 @@ function refreshDriveUI(){
   $('#bDriveStatus').textContent=!d?'Only on this phone. Save it to Google Drive to back it up and share it.'
     :d.error?(ERRORS[d.error]||d.error)
     :`${d.readonly?'View-only shared board. ':''}Synced ${ago(d.syncedAt)}.`;
+  const waiting=Object.values(state.voiceMeta).filter(m=>m.pending).length,n=Object.keys(state.voice).length;
+  $('#bVoiceBackup').hidden=signedIn();
+  $('#bVoiceStatus').textContent=!signedIn()
+    ?`Your ${n} recording${n===1?'':'s'} exist only on this phone.`
+    :state.voiceError?'Recording backup failed. It will retry.'
+    :waiting?`${waiting} recording${waiting===1?'':'s'} waiting to back up.`
+    :`Your ${n} recording${n===1?' is':'s are'} backed up privately to your Google Drive. They're never shared.`;
 }
 async function saveToDrive(){
   const b=cur(),btn=$('#bDriveSave');btn.disabled=true;$('#bDriveStatus').textContent='Saving to Google Drive…';
@@ -779,7 +855,7 @@ $('#boardBtn').onclick=openBoardDlg;
     try{const s=JSON.parse(lsGet('tb_token')||'null');if(s&&s.exp>Date.now()+60000){gToken=s.t;gTokenExp=s.exp;}}catch(e){}
     const add=new URLSearchParams(location.search).get('add');
     if(add){$('#addBanner').dataset.id=add;$('#addBanner').hidden=false;}
-    if(state.boards.some(b=>b.drive)){setSyncState(gToken?'ok':'auth');if(gToken)syncAll(false);}
+    if(state.boards.some(b=>b.drive)||signedIn()){setSyncState(gToken?'ok':'auth');if(gToken)syncAll(false);}
     document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncAll(false);});
     setInterval(()=>{if(document.visibilityState==='visible')syncAll(false);},60000);
   }
